@@ -2,157 +2,146 @@
 <html lang="ja">
 <head>
     <meta charset="utf-8">
-    <title>RIKU 3D ONLINE OMEGA</title>
+    <title>RIKU 3D - RPG MODE</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Impact', sans-serif; }
-        #hud { position: absolute; top: 20px; left: 20px; color: #fff; pointer-events: none; z-index: 10; }
-        .stat { font-size: 24px; color: #0f0; text-shadow: 2px 2px #000; }
-        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; background: #fff; border-radius: 50%; transform: translate(-50%, -50%); }
+        :root { --rpg-gold: #ffd700; --rpg-red: #ff4444; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Georgia', serif; }
         
-        /* 3Dショップ画面 */
-        #shop-ui { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,30,0.9); padding: 30px; border: 3px solid #0ff; display: none; color: white; text-align: center; border-radius: 20px; z-index: 30; }
-        .shop-item { background: #222; margin: 10px; padding: 15px; cursor: pointer; border-radius: 10px; }
-        .shop-item:hover { background: #444; }
-
-        /* オンライン設定 */
-        #online-info { position: absolute; bottom: 20px; left: 20px; color: #fff; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; }
-        #lobby { position: absolute; width: 100%; height: 100%; background: #001; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; color: white; }
-        input { padding: 10px; font-size: 20px; border-radius: 5px; margin: 10px; }
+        /* RPG風HUD */
+        #rpg-hud { position: absolute; bottom: 20px; left: 20px; color: white; z-index: 10; display: none; }
+        .lv-badge { background: var(--rpg-gold); color: black; padding: 5px 15px; font-weight: bold; border-radius: 5px; font-size: 24px; }
+        .exp-bar { width: 300px; height: 10px; background: #333; margin-top: 10px; border: 1px solid #fff; }
+        #exp-fill { width: 0%; height: 100%; background: #00ffcc; transition: 0.5s; }
+        
+        /* レベルアップ演出 */
+        #lv-up-text { 
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 80px; color: var(--rpg-gold); font-weight: bold; font-style: italic;
+            text-shadow: 0 0 20px #fff; display: none; z-index: 100;
+            animation: levelUpAnim 2s forwards;
+        }
+        @keyframes levelUpAnim {
+            0% { opacity: 0; transform: translate(-50%, 0%); }
+            50% { opacity: 1; transform: translate(-50%, -50%); }
+            100% { opacity: 0; transform: translate(-50%, -100%); }
+        }
     </style>
 </head>
 <body>
-    <div id="lobby">
-        <h1>RIKU 3D ONLINE</h1>
-        <p>Your ID: <span id="my-id">...connecting...</span></p>
-        <input type="text" id="peer-id-input" placeholder="Friend's ID to Join">
-        <button onclick="bootGame()" style="padding:15px 40px; font-size:24px; cursor:pointer;">START GAME</button>
+
+    <div id="lv-up-text">LEVEL UP!!</div>
+
+    <div id="rpg-hud">
+        <span class="lv-badge">LV. <span id="lv-val">1</span></span>
+        <div style="margin-top:10px;">HP: <span id="hp-val">100</span> / 100</div>
+        <div class="exp-bar"><div id="exp-fill"></div></div>
+        <div style="font-size:14px; opacity:0.8;">NEXT LEVEL: <span id="exp-val">0</span>/1000</div>
     </div>
 
-    <div id="shop-ui">
-        <h2>--- RIKU CREW SHOP ---</h2>
-        <div class="shop-item" onclick="buyWeapon('GOLD_GUN', 10000)">GOLD GUN (10000V)</div>
-        <div class="shop-item" onclick="buyWeapon('SPEED_BOOTS', 5000)">SPEED BOOTS (5000V)</div>
-        <button onclick="toggleShop()">CLOSE SHOP (B)</button>
+    <div style="position:fixed; top:0; left:0; width:100%; height:100%; z-index:-1; opacity:0.3;">
+        <iframe width="100%" height="100%" src="https://www.youtube.com/embed/LA50iqj0KjU?autoplay=1&mute=1&loop=1&playlist=LA50iqj0KjU" frameborder="0"></iframe>
     </div>
-
-    <div id="hud">
-        <div id="v-text" class="stat">V-BUCKS: 0</div>
-        <div id="l-text" class="stat">LEVEL: 1</div>
-        <div class="stat" style="color: #f0f;">SHOP: PRESS [ B ]</div>
-    </div>
-    <div id="crosshair"></div>
-    <div id="online-info">PLAYERS ONLINE: <span id="p-count">1</span></div>
 
     <script>
-        let scene, camera, renderer, player, peer, conn;
-        let vbucks = parseInt(localStorage.getItem('riku_3d_v')) || 5000;
-        let otherPlayers = {};
-        let keys = {};
-        let yaw = 0, pitch = 0;
+        let scene, camera, renderer, player, sword;
+        let lv = 1, exp = 0, hp = 100;
+        let enemies = [], keys = {}, yaw = 0, pitch = 0;
 
-        // PeerJS初期化（オンライン用）
-        peer = new Peer();
-        peer.on('open', id => document.getElementById('my-id').innerText = id);
-        peer.on('connection', c => setupConn(c));
-
-        function bootGame() {
-            const targetId = document.getElementById('peer-id-input').value;
-            if(targetId) setupConn(peer.connect(targetId));
-            document.getElementById('lobby').style.display = 'none';
-            init(); animate();
-            document.body.requestPointerLock();
-        }
-
-        function setupConn(c) {
-            conn = c;
-            conn.on('data', data => {
-                if(data.type === 'move') updateOtherPlayer(data);
-            });
-        }
-
-        function init() {
+        function initRPG() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000005);
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            scene.background = new THREE.Color(0x050510);
+            scene.fog = new THREE.Fog(0x050510, 10, 80);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            scene.add(new THREE.GridHelper(200, 50, 0x00ffff, 0x111111));
-            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            // ファンタジーな地面
+            const floor = new THREE.GridHelper(200, 40, 0x8844ff, 0x221144);
+            scene.add(floor);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
             player = new THREE.Group();
-            player.position.set(0, 1.6, 0);
+            player.position.set(0, 1.6, 5);
             scene.add(player);
-            
-            updateUI();
+
+            // 武器：勇者の剣
+            const swordGeo = new THREE.BoxGeometry(0.1, 1.2, 0.2);
+            const swordMat = new THREE.MeshStandardMaterial({color: 0xcccccc, metalness: 1, roughness: 0.2});
+            sword = new THREE.Mesh(swordGeo, swordMat);
+            sword.position.set(0.5, -0.5, -0.8);
+            sword.rotation.x = Math.PI/3;
+            player.add(sword);
+
+            // 敵（モンスターカカシ）を配置
+            for(let i=0; i<5; i++) spawnEnemy();
+
+            document.getElementById('rpg-hud').style.display = 'block';
+            animate();
+            document.body.requestPointerLock();
         }
 
-        function updateOtherPlayer(data) {
-            if(!otherPlayers[data.id]) {
-                const geo = new THREE.BoxGeometry(1, 2, 1);
-                const mat = new THREE.MeshPhongMaterial({ color: 0xff00ff });
-                otherPlayers[data.id] = new THREE.Mesh(geo, mat);
-                scene.add(otherPlayers[data.id]);
+        function spawnEnemy() {
+            const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1, 4, 8), new THREE.MeshStandardMaterial({color: 0xff4444}));
+            m.position.set(Math.random()*40-20, 1, Math.random()*40-20);
+            scene.add(m);
+            enemies.push(m);
+        }
+
+        function attack() {
+            // 剣を振るアニメ
+            sword.rotation.x = 0;
+            setTimeout(() => sword.rotation.x = Math.PI/3, 200);
+
+            // 当たり判定
+            const ray = new THREE.Raycaster();
+            ray.setFromCamera(new THREE.Vector2(0,0), camera);
+            enemies.forEach((en, idx) => {
+                if(ray.intersectObject(en).length > 0) {
+                    gainExp(250);
+                    scene.remove(en);
+                    enemies.splice(idx, 1);
+                    setTimeout(spawnEnemy, 2000); // 復活
+                }
+            });
+        }
+
+        function gainExp(amt) {
+            exp += amt;
+            if(exp >= 1000) {
+                lv++; exp = 0;
+                document.getElementById('lv-up-text').style.display = 'block';
+                setTimeout(() => document.getElementById('lv-up-text').style.display = 'none', 2000);
             }
-            otherPlayers[data.id].position.set(data.x, data.y, data.z);
+            document.getElementById('lv-val').innerText = lv;
+            document.getElementById('exp-val').innerText = exp;
+            document.getElementById('exp-fill').style.width = (exp/1000)*100 + "%";
         }
 
-        // ショップ機能
-        function toggleShop() {
-            const ui = document.getElementById('shop-ui');
-            const isVisible = ui.style.display === 'block';
-            ui.style.display = isVisible ? 'none' : 'block';
-            if(!isVisible) document.exitPointerLock();
-            else document.body.requestPointerLock();
-        }
-
-        function buyWeapon(name, price) {
-            if(vbucks >= price) {
-                vbucks -= price;
-                alert(name + " PURCHASED!");
-                updateUI();
-            } else {
-                alert("NEED MORE V-BUCKS!");
-            }
-        }
-
-        window.addEventListener('keydown', e => {
-            keys[e.code] = true;
-            if(e.code === 'KeyB') toggleShop();
-        });
+        window.addEventListener('keydown', e => keys[e.code] = true);
         window.addEventListener('keyup', e => keys[e.code] = false);
+        window.addEventListener('mousedown', () => { if(document.pointerLockElement) attack(); });
         document.addEventListener('mousemove', e => {
-            if (document.pointerLockElement === document.body) {
+            if(document.pointerLockElement) {
                 yaw -= e.movementX * 0.002;
-                pitch -= e.movementY * 0.002;
+                pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY * 0.002));
             }
         });
-
-        function updateUI() {
-            document.getElementById('v-text').innerText = `V-BUCKS: ${vbucks}`;
-            localStorage.setItem('riku_3d_v', vbucks);
-        }
 
         function animate() {
             requestAnimationFrame(animate);
-            const speed = 0.1;
-            if(keys['KeyW']) { player.position.x += Math.sin(yaw)*speed; player.position.z += Math.cos(yaw)*speed; }
-            if(keys['KeyS']) { player.position.x -= Math.sin(yaw)*speed; player.position.z -= Math.cos(yaw)*speed; }
-            
+            const s = 0.15;
+            if(keys['KeyW']) { player.position.x += Math.sin(yaw)*s; player.position.z += Math.cos(yaw)*s; }
+            if(keys['KeyS']) { player.position.x -= Math.sin(yaw)*s; player.position.z -= Math.cos(yaw)*s; }
             player.rotation.y = yaw;
             camera.position.copy(player.position);
-            camera.rotation.set(pitch, yaw + Math.PI, 0, 'YXZ');
-
-            // オンラインで位置送信
-            if(conn && conn.open) {
-                conn.send({ type: 'move', id: peer.id, x: player.position.x, y: player.position.y, z: player.position.z });
-            }
-
+            camera.rotation.set(pitch, yaw+Math.PI, 0, 'YXZ');
             renderer.render(scene, camera);
         }
+
+        initRPG();
     </script>
 </body>
 </html>
